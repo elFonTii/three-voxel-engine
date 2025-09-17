@@ -180,6 +180,7 @@ export async function GET(req: NextRequest) {
     // Use a stable cache key; cache wrapper ignores params, so include in key
     const cacheKey = keyOf(params);
     const data = await getChunkCached(params);
+    const bufferedData = Buffer.from(data);
 
     // Compute a weak ETag from key (deterministic)
     const etag = `W/"${hash32(cacheKey).toString(16)}-${params.size}"`;
@@ -191,7 +192,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Return compact binary body (Uint8Array)
-    return new Response(data, {
+    return new Response(bufferedData, {
       status: 200,
       headers: {
         'Content-Type': 'application/octet-stream',
