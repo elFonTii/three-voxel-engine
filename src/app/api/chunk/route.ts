@@ -240,7 +240,7 @@ export async function GET(req: NextRequest) {
       return new Response(null, { status: 304, headers: { 'Cache-Control': CACHE_CONTROL, ETag: etag } });
     }
 
-    return new Response(data, {
+    return new Response(data as BodyInit, {
       status: 200,
       headers: {
         'Content-Type': 'application/octet-stream',
