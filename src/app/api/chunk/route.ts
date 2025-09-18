@@ -70,22 +70,57 @@ function toUnitFloat(u32: number) {
   return (u32 & 0x7ffffff) / 0x8000000; // 27 bits of mantissa
 }
 
-// Core generator: mirrors client logic but with deterministic seeding and world offsets
+// Global noise instances cache to ensure continuity across chunks
+const globalNoiseCache = new Map<string, { 
+  surfaceNoise: any, 
+  cavesNoise: any, 
+  lastAccessed: number 
+}>();
+
+// Clean up old noise instances to prevent memory leaks
+const CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX_AGE = 30 * 60 * 1000; // 30 minutes
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of globalNoiseCache.entries()) {
+    if (now - value.lastAccessed > CACHE_MAX_AGE) {
+      globalNoiseCache.delete(key);
+    }
+  }
+}, CACHE_CLEANUP_INTERVAL);
+
+// Core generator: uses global noise map for continuous terrain
 function generateChunkServer(params: Params): Uint8Array {
   const { size: S, seed, base, cx, cy, cz, surfaceScale, cavesScale, cavesThreshold, grassDepth, dirtDepth } = params;
 
-  // World-space offset per chunk so neighboring chunks differ
+  // World-space offset per chunk
   const ox = cx * S;
   const oy = cy * S;
   const oz = cz * S;
 
-  // Seed noise deterministically with seed + coords
-  const baseHash = hash32(seed);
-  const noiseSeed1 = toUnitFloat(mix(baseHash, ox, oy, oz, 0xA1));
-  const noiseSeed2 = toUnitFloat(mix(baseHash ^ 0x9e3779b9, ox, oy, oz, 0xB2));
+  // Create or reuse global noise instances based only on seed (not chunk coords)
+  const noiseKey = `${seed}`;
+  let noiseInstances = globalNoiseCache.get(noiseKey);
   
-  const surfaceNoise = makeNoise(noiseSeed1);
-  const cavesNoise = makeNoise(noiseSeed2);
+  if (!noiseInstances) {
+    // Create deterministic but global noise instances
+    const baseHash = hash32(seed);
+    const surfaceNoiseSeed = toUnitFloat(baseHash);
+    const cavesNoiseSeed = toUnitFloat(baseHash ^ 0x9e3779b9);
+    
+    noiseInstances = {
+      surfaceNoise: makeNoise(surfaceNoiseSeed),
+      cavesNoise: makeNoise(cavesNoiseSeed),
+      lastAccessed: Date.now()
+    };
+    globalNoiseCache.set(noiseKey, noiseInstances);
+  } else {
+    // Update last accessed time
+    noiseInstances.lastAccessed = Date.now();
+  }
+  
+  const { surfaceNoise, cavesNoise } = noiseInstances;
 
   // Allocate grid and fill base block
   const total = S * S * S;
@@ -170,6 +205,8 @@ const getChunkCached = cache(
 );
 
 function keyOf(p: Params) {
+  // Include chunk coordinates in cache key since each chunk will have unique content
+  // but now they'll be generated from the same continuous noise field
   return `${p.size}|${p.seed}|${p.base}|${p.cx}|${p.cy}|${p.cz}|${p.surfaceScale}|${p.cavesScale}|${p.cavesThreshold}|${p.grassDepth}|${p.dirtDepth}`;
 }
 
@@ -179,8 +216,20 @@ export async function GET(req: NextRequest) {
 
     // Use a stable cache key; cache wrapper ignores params, so include in key
     const cacheKey = keyOf(params);
-    const data = await getChunkCached(params);
-    const bufferedData = Buffer.from(data);
+    const rawData = await getChunkCached(params);
+
+    let data: Uint8Array;
+
+    if (rawData instanceof Uint8Array) {
+      data = rawData;
+    } else if (typeof rawData === 'object') {
+      // Example: convert from object to binary
+      // If it's JSON-like, stringify and then buffer
+      const jsonString = JSON.stringify(rawData);
+      data = new TextEncoder().encode(jsonString); // ← UTF-8 encoded Uint8Array
+    } else {
+      throw new Error("Unsupported data type returned from getChunkCached()");
+    }
 
     // Compute a weak ETag from key (deterministic)
     const etag = `W/"${hash32(cacheKey).toString(16)}-${params.size}"`;
@@ -191,8 +240,7 @@ export async function GET(req: NextRequest) {
       return new Response(null, { status: 304, headers: { 'Cache-Control': CACHE_CONTROL, ETag: etag } });
     }
 
-    // Return compact binary body (Uint8Array)
-    return new Response(bufferedData, {
+    return new Response(data, {
       status: 200,
       headers: {
         'Content-Type': 'application/octet-stream',
