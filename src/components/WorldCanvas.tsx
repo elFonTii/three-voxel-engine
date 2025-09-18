@@ -59,7 +59,7 @@ export const WorldCanvas: React.FC<WorldCanvasProps> = ({ className}) => {
       if (loaded.has(key) || inflight.has(key) || disposed) return;
       inflight.add(key);
       try {
-        const url = `/api/chunk?size=${CHUNK}&seed=${encodeURIComponent(WORLD_SEED)}&base=${BASE_BLOCK}&cx=${cx}&cy=0&cz=${cz}&surfaceScale=0.04&cavesScale=0.16&cavesThreshold=0.72&grassDepth=2&dirtDepth=3`;
+        const url = `/api/chunk?size=${CHUNK}&seed=${encodeURIComponent(WORLD_SEED)}&base=${BASE_BLOCK}&cx=${cx}&cy=0&cz=${cz}&surfaceScale=0.06&cavesScale=0.18&cavesThreshold=0.70&grassDepth=3&dirtDepth=3`;
         const res = await fetch(url, { cache: 'force-cache' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = await res.arrayBuffer();
